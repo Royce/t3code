@@ -1,6 +1,18 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedProjectKey,
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ScopedProjectRef,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import { createBrowserHistory, createHashHistory } from "@tanstack/react-router";
+import { Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 
 import { applyAppearanceContrast } from "./appearanceContrast";
@@ -22,7 +34,7 @@ import { startSlowRpcRequestToasts } from "./components/SlowRpcRequestToastCoord
 import { startThreadNotifications } from "./components/ThreadNotificationCoordinator";
 import { startGuideRunNotifications } from "./components/pullRequest/guide/PullRequestGuideRunCoordinator";
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "./branding";
-import { resolveServerBackedAppDisplayName } from "./branding.logic";
+import { formatDocumentTitle, resolveServerBackedAppDisplayName } from "./branding.logic";
 import { isElectron } from "./env";
 import {
   subscribeComposerDraftModelReconciliation,
@@ -46,8 +58,15 @@ import {
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { startProviderAuthDelivery } from "./providerAuthDelivery";
+import {
+  PULL_REQUESTS_PANEL_REF,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+  type PullRequestSurface,
+} from "./rightPanelStore";
 import { getRouter, type AppRouter } from "./router";
 import { appAtomRegistry } from "./rpc/atomRegistry";
+import { environmentProjects } from "./state/projects";
 import { primaryServerConfigAtom } from "./state/server";
 import { environmentShell } from "./state/shell";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
@@ -117,16 +136,96 @@ function startClientAppearance(): void {
   apply();
 }
 
-function startDocumentTitle(): void {
+interface DocumentTitleTarget {
+  readonly threadRef: ScopedThreadRef | null;
+  readonly draftProjectRef: ScopedProjectRef | null;
+  readonly pullRequest: PullRequestSurface | null;
+}
+
+const documentTitleTargetAtom = Atom.make<DocumentTitleTarget>({
+  threadRef: null,
+  draftProjectRef: null,
+  pullRequest: null,
+}).pipe(Atom.keepAlive, Atom.withLabel("web-document-title-target"));
+
+/** "project / thread" or "project / PR #n", so the desktop window names the work; else the app name. */
+const documentTitleAtom = Atom.make((get) => {
+  const appDisplayName = resolveServerBackedAppDisplayName({
+    baseName: APP_BASE_NAME,
+    fallbackDisplayName: APP_DISPLAY_NAME,
+    fallbackStageLabel: APP_STAGE_LABEL,
+    primaryServerVersion: get(primaryServerConfigAtom)?.environment.serverVersion ?? null,
+  });
+  const { threadRef, draftProjectRef, pullRequest } = get(documentTitleTargetAtom);
+  if (pullRequest) {
+    const project = pullRequest.environmentId
+      ? get(
+          environmentProjects.projectAtom(
+            scopeProjectRef(
+              pullRequest.environmentId as EnvironmentId,
+              pullRequest.projectId as ProjectId,
+            ),
+          ),
+        )
+      : null;
+    return formatDocumentTitle({
+      appDisplayName,
+      projectTitle: project?.title ?? pullRequest.repository,
+      threadTitle: `PR #${pullRequest.number}`,
+    });
+  }
+  const threadShell = threadRef
+    ? get(environmentThreadShells.quietThreadShellAtom(threadRef))
+    : null;
+  const projectRef = threadShell
+    ? scopeProjectRef(threadShell.environmentId, threadShell.projectId)
+    : draftProjectRef;
+  const project = projectRef ? get(environmentProjects.projectAtom(projectRef)) : null;
+  return formatDocumentTitle({
+    appDisplayName,
+    projectTitle: project?.title ?? null,
+    threadTitle: threadShell?.title ?? (draftProjectRef ? "New thread" : null),
+  });
+}).pipe(Atom.withLabel("web-document-title"));
+
+function startDocumentTitle(router: AppRouter): void {
+  let currentKey = "";
+  const syncTarget = () => {
+    const target = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
+    const draftSession =
+      target?.kind === "draft"
+        ? useComposerDraftStore.getState().getDraftSession(target.draftId)
+        : null;
+    const threadRef =
+      target?.kind === "server" ? target.threadRef : (draftSession?.promotedTo ?? null);
+    const draftProjectRef = draftSession
+      ? scopeProjectRef(draftSession.environmentId, draftSession.projectId)
+      : null;
+    const panel =
+      router.state.matches.at(-1)?.routeId === "/_chat/pull-requests"
+        ? selectThreadRightPanelState(
+            useRightPanelStore.getState().byThreadKey,
+            PULL_REQUESTS_PANEL_REF,
+          )
+        : null;
+    const surface = panel?.isOpen
+      ? panel.surfaces.find((candidate) => candidate.id === panel.activeSurfaceId)
+      : undefined;
+    const pullRequest = surface?.kind === "pull-request" ? surface : null;
+    const key = `${threadRef ? scopedThreadKey(threadRef) : ""}|${draftProjectRef ? scopedProjectKey(draftProjectRef) : ""}|${pullRequest?.id ?? ""}:${pullRequest?.environmentId ?? ""}`;
+    if (key === currentKey) return;
+    currentKey = key;
+    appAtomRegistry.set(documentTitleTargetAtom, { threadRef, draftProjectRef, pullRequest });
+  };
+  router.subscribe("onResolved", syncTarget);
+  useComposerDraftStore.subscribe(syncTarget);
+  useRightPanelStore.subscribe(syncTarget);
+  syncTarget();
+
   appAtomRegistry.subscribe(
-    primaryServerConfigAtom,
-    (config) => {
-      document.title = resolveServerBackedAppDisplayName({
-        baseName: APP_BASE_NAME,
-        fallbackDisplayName: APP_DISPLAY_NAME,
-        fallbackStageLabel: APP_STAGE_LABEL,
-        primaryServerVersion: config?.environment.serverVersion ?? null,
-      });
+    documentTitleAtom,
+    (title) => {
+      document.title = title;
     },
     { immediate: true },
   );
@@ -180,7 +279,7 @@ export function startAppServices(): AppRouter {
   installDesktopPasteAsText(window.desktopBridge, window);
 
   startClientAppearance();
-  startDocumentTitle();
+  startDocumentTitle(router);
   startHostEnvironmentLookup();
   startEnvironmentThemeRepaint();
   startBrowserChromeThemeSync(router);

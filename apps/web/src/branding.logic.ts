@@ -36,3 +36,18 @@ export function resolveServerBackedAppDisplayName(input: {
     ? input.fallbackDisplayName
     : formatAppDisplayName({ baseName: input.baseName, stageLabel });
 }
+
+/**
+ * Document title for the active view. A thread reads as "project / thread";
+ * anything else falls back to the app name.
+ */
+export function formatDocumentTitle(input: {
+  readonly appDisplayName: string;
+  readonly projectTitle: string | null;
+  readonly threadTitle: string | null;
+}): string {
+  if (input.projectTitle === null || input.threadTitle === null) {
+    return input.appDisplayName;
+  }
+  return `${input.projectTitle} / ${input.threadTitle}`;
+}
