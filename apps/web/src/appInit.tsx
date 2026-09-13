@@ -1,12 +1,19 @@
 import {
+  scopedProjectKey,
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ScopedProjectRef,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import { createBrowserHistory, createHashHistory } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
+import { msg } from "gt-react";
 
 import { applyAppearanceContrast } from "./appearanceContrast";
 import { applyAppearanceFontVariables, TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "./appearanceFonts";
@@ -53,6 +60,12 @@ import {
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { startProviderAuthDelivery } from "./providerAuthDelivery";
+import {
+  PULL_REQUESTS_PANEL_REF,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+  type PullRequestSurface,
+} from "./rightPanelStore";
 import { getRouter, type AppRouter } from "./router";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { environmentProjects } from "./state/projects";
@@ -127,13 +140,44 @@ function startClientAppearance(): void {
   apply();
 }
 
-function readOpenThreadRef(router: AppRouter): ScopedThreadRef | null {
-  const target = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
+interface OpenTitleTarget {
+  readonly threadRef: ScopedThreadRef | null;
+  /** A draft not yet sent still names its project. */
+  readonly draftProjectRef: ScopedProjectRef | null;
+  readonly pullRequest: PullRequestSurface | null;
+}
+
+function readOpenTitleTarget(router: AppRouter): OpenTitleTarget {
+  const match = router.state.matches.at(-1);
+  const target = resolveThreadRouteTarget(match?.params ?? {});
   const draft =
     target?.kind === "draft"
       ? useComposerDraftStore.getState().getDraftSession(target.draftId)
       : null;
-  return resolveActiveThreadRouteRef(target, draft);
+  const panel =
+    match?.routeId === "/_chat/pull-requests"
+      ? selectThreadRightPanelState(
+          useRightPanelStore.getState().byThreadKey,
+          PULL_REQUESTS_PANEL_REF,
+        )
+      : null;
+  const surface = panel?.isOpen
+    ? panel.surfaces.find((candidate) => candidate.id === panel.activeSurfaceId)
+    : undefined;
+  return {
+    threadRef: resolveActiveThreadRouteRef(target, draft),
+    draftProjectRef: draft ? scopeProjectRef(draft.environmentId, draft.projectId) : null,
+    pullRequest: surface?.kind === "pull-request" ? surface : null,
+  };
+}
+
+function openTitleTargetKey(target: OpenTitleTarget): string {
+  const { threadRef, draftProjectRef, pullRequest } = target;
+  return [
+    threadRef ? scopedThreadKey(threadRef) : "",
+    draftProjectRef ? scopedProjectKey(draftProjectRef) : "",
+    pullRequest ? `${pullRequest.id}:${pullRequest.environmentId ?? ""}` : "",
+  ].join("|");
 }
 
 function windowTitleThreadStatus(
@@ -143,28 +187,40 @@ function windowTitleThreadStatus(
 }
 
 /**
- * Names the open thread and its project in the window title, or the app when none is open.
+ * Names the open thread (or PR) and its project in the window title, or the app when none is open.
  * Screen readers read it on Alt+Tab, so it can lead with the thread and what it's doing.
  */
 function startDocumentTitle(router: AppRouter): void {
   const readOnGuestPage = () => router.state.matches.some((match) => match.routeId === "/guest");
-  let openThreadRef = readOpenThreadRef(router);
+  let openTarget = readOpenTitleTarget(router);
+  let openTargetKey = openTitleTargetKey(openTarget);
   let onGuestPage = readOnGuestPage();
+  const readProjectTitle = (ref: ScopedProjectRef | null) =>
+    ref === null
+      ? null
+      : (appAtomRegistry.get(environmentProjects.projectAtom(ref))?.title ?? null);
   const write = () => {
     // GuestPage titles the tab after the shared thread.
     if (onGuestPage) return;
+    const { threadRef, draftProjectRef, pullRequest } = openTarget;
     const thread =
-      openThreadRef === null
+      pullRequest !== null || threadRef === null
         ? null
-        : appAtomRegistry.get(environmentThreadShells.quietThreadShellAtom(openThreadRef));
-    const project =
-      thread === null
-        ? null
-        : appAtomRegistry.get(
-            environmentProjects.projectAtom(
-              scopeProjectRef(thread.environmentId, thread.projectId),
-            ),
-          );
+        : appAtomRegistry.get(environmentThreadShells.quietThreadShellAtom(threadRef));
+    const pullRequestProjectRef = pullRequest?.environmentId
+      ? scopeProjectRef(
+          pullRequest.environmentId as EnvironmentId,
+          pullRequest.projectId as ProjectId,
+        )
+      : null;
+    const projectTitle = pullRequest
+      ? (readProjectTitle(pullRequestProjectRef) ?? pullRequest.repository)
+      : readProjectTitle(
+          thread ? scopeProjectRef(thread.environmentId, thread.projectId) : draftProjectRef,
+        );
+    const threadTitle = pullRequest
+      ? m(msg("PR #{number}", { number: pullRequest.number }))
+      : (thread?.title ?? (draftProjectRef ? m(msg("New thread")) : null));
     const title = resolveWindowTitle({
       appDisplayName: resolveServerBackedAppDisplayName({
         baseName: APP_BASE_NAME,
@@ -173,8 +229,8 @@ function startDocumentTitle(router: AppRouter): void {
         primaryServerVersion:
           appAtomRegistry.get(primaryServerConfigAtom)?.environment.serverVersion ?? null,
       }),
-      projectTitle: project?.title ?? null,
-      threadTitle: thread?.title ?? null,
+      projectTitle,
+      threadTitle,
       ...(getClientSettings().screenReaderWindowTitle && {
         screenReader: {
           threadStatus: windowTitleThreadStatus(thread),
@@ -189,25 +245,20 @@ function startDocumentTitle(router: AppRouter): void {
   let unsubscribeOpenThread = () => {};
   const watchOpenThread = () => {
     unsubscribeOpenThread();
+    const { threadRef } = openTarget;
     unsubscribeOpenThread =
-      openThreadRef === null
+      threadRef === null
         ? () => {}
-        : appAtomRegistry.subscribe(
-            environmentThreadShells.quietThreadShellAtom(openThreadRef),
-            write,
-          );
+        : appAtomRegistry.subscribe(environmentThreadShells.quietThreadShellAtom(threadRef), write);
   };
-  // The draft store changes on every keystroke; only a new open thread matters here.
-  const updateOpenThread = () => {
-    const next = readOpenThreadRef(router);
+  // The draft and panel stores change often; only a new open thread or PR matters here.
+  const updateOpenTarget = () => {
+    const next = readOpenTitleTarget(router);
+    const nextKey = openTitleTargetKey(next);
     const nextOnGuestPage = readOnGuestPage();
-    if (
-      nextOnGuestPage === onGuestPage &&
-      (next && scopedThreadKey(next)) === (openThreadRef && scopedThreadKey(openThreadRef))
-    ) {
-      return;
-    }
-    openThreadRef = next;
+    if (nextOnGuestPage === onGuestPage && nextKey === openTargetKey) return;
+    openTarget = next;
+    openTargetKey = nextKey;
     onGuestPage = nextOnGuestPage;
     watchOpenThread();
     write();
@@ -217,8 +268,9 @@ function startDocumentTitle(router: AppRouter): void {
   appAtomRegistry.subscribe(environmentProjects.projectsAtom, write);
   subscribeClientSettings(write);
   subscribeI18n(write);
-  router.subscribe("onResolved", updateOpenThread);
-  useComposerDraftStore.subscribe(updateOpenThread);
+  router.subscribe("onResolved", updateOpenTarget);
+  useComposerDraftStore.subscribe(updateOpenTarget);
+  useRightPanelStore.subscribe(updateOpenTarget);
 }
 
 /**
