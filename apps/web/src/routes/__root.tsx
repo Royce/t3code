@@ -8,6 +8,7 @@ import {
   createRootRoute,
   type ErrorComponentProps,
   useLocation,
+  useMatch,
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
@@ -15,7 +16,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
-import { resolveServerBackedAppDisplayName } from "../branding.logic";
+import { formatDocumentTitle, resolveServerBackedAppDisplayName } from "../branding.logic";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
@@ -62,6 +63,9 @@ import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { shellEnvironment } from "../state/shell";
+import { useProject, useThreadShell } from "../state/entities";
+import { DraftId, useComposerDraftStore } from "../composerDraftStore";
+import { resolveThreadRouteRef } from "../threadRoutes";
 import { useAtomValue } from "@effect/atom-react";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
@@ -326,14 +330,48 @@ function FontAppearanceSync() {
   return null;
 }
 
+/**
+ * Mirrors the open thread into the document title as "project / thread" so
+ * the desktop window (and anything reading its accessibility title) names
+ * the work in progress. Falls back to the app name off a thread route.
+ */
 function DocumentTitleSync() {
   const primaryServerVersion =
     useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
-  const title = resolveServerBackedAppDisplayName({
+  const appDisplayName = resolveServerBackedAppDisplayName({
     baseName: APP_BASE_NAME,
     fallbackDisplayName: APP_DISPLAY_NAME,
     fallbackStageLabel: APP_STAGE_LABEL,
     primaryServerVersion,
+  });
+
+  const serverThreadRef = useMatch({
+    from: "/_chat/$environmentId/$threadId",
+    shouldThrow: false,
+    select: (match) => resolveThreadRouteRef(match.params),
+  });
+  const draftId = useMatch({
+    from: "/_chat/draft/$draftId",
+    shouldThrow: false,
+    select: (match) => DraftId.make(match.params.draftId),
+  });
+  const draftSession = useComposerDraftStore((store) =>
+    draftId === undefined ? null : store.getDraftSession(draftId),
+  );
+  const threadRef = serverThreadRef ?? draftSession?.promotedTo ?? null;
+  const threadShell = useThreadShell(threadRef);
+  const projectRef =
+    threadShell !== null
+      ? scopeProjectRef(threadShell.environmentId, threadShell.projectId)
+      : draftSession
+        ? scopeProjectRef(draftSession.environmentId, draftSession.projectId)
+        : null;
+  const project = useProject(projectRef);
+
+  const title = formatDocumentTitle({
+    appDisplayName,
+    projectTitle: project?.title ?? null,
+    threadTitle: threadShell?.title ?? (draftSession ? "New thread" : null),
   });
 
   useEffect(() => {

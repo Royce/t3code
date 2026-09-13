@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  formatDocumentTitle,
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
 } from "./branding.logic";
@@ -112,5 +113,26 @@ describe("branding logic", () => {
         primaryServerVersion: "0.0.28-nightly.20260616",
       }),
     ).toBe("T3 Code (Alpha)");
+  });
+});
+
+describe("formatDocumentTitle", () => {
+  it("names the open thread as project / thread", () => {
+    expect(
+      formatDocumentTitle({
+        appDisplayName: "T3 Code",
+        projectTitle: "t3code",
+        threadTitle: "Window title shows thread",
+      }),
+    ).toBe("t3code / Window title shows thread");
+  });
+
+  it("falls back to the app name until both project and thread resolve", () => {
+    expect(
+      formatDocumentTitle({ appDisplayName: "T3 Code", projectTitle: null, threadTitle: null }),
+    ).toBe("T3 Code");
+    expect(
+      formatDocumentTitle({ appDisplayName: "T3 Code", projectTitle: "t3code", threadTitle: null }),
+    ).toBe("T3 Code");
   });
 });
