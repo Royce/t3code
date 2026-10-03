@@ -51,6 +51,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { GUEST_PAGE_PATH } from "../guestPage";
+import { isEmbedPathname } from "../embedRoute";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -182,6 +183,18 @@ function RootRouteBranch() {
     return <Outlet />;
   }
 
+  // Embedded threads keep live updates but none of the app shell, and skip coordinators that
+  // could navigate the frame elsewhere (first-run wizard, snapshot setup) or act on other threads.
+  if (isEmbedPathname(pathname)) {
+    return (
+      <>
+        <ConfirmDialogHost />
+        {primaryEnvironmentAuthenticated ? <EventRouter skipInitialBootstrapNavigation /> : null}
+        <Outlet />
+      </>
+    );
+  }
+
   // Settings can reopen /welcome mid-session, so it mounts everything the app does except the
   // first-run gate and the event router, whose first navigation would leave the page.
   const appHosts = (
@@ -208,6 +221,7 @@ function RootRouteBranch() {
       {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
     </>
   );
+
   const appShell = (
     <CommandPalette>
       {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
