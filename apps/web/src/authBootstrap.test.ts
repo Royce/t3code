@@ -616,6 +616,25 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(testApi.calls.browserSession).toEqual([]);
   });
 
+  it("pairs an embed URL in place, keeping the frame on the embedded thread", async () => {
+    const testApi = await installAuthApi({
+      session: sequence(unauthenticatedSession(LOOPBACK_AUTH), authenticatedSession(LOOPBACK_AUTH)),
+      browserSession: () => Effect.succeed(browserSession(["orchestration:read", "access:write"])),
+    });
+    const testWindow = installTestBrowser(
+      "http://localhost/embed/env-1/thread-1#token=embed-token",
+    );
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "authenticated",
+    });
+
+    expect(testApi.calls.browserSession).toEqual([{ credential: "embed-token" }]);
+    expect(testWindow.location.pathname).toBe("/embed/env-1/thread-1");
+    expect(testWindow.location.hash).toBe("");
+  });
+
   it("reports a rejected URL token without caching false success", async () => {
     const cause = new EnvironmentAuthInvalidError({
       code: "auth_invalid",

@@ -34,6 +34,7 @@ import {
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   agentControlledBrowserCloseConfirmation,
+  isChromeShortcutCommand,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
@@ -89,6 +90,28 @@ import {
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
 } from "./ChatView.logic";
+
+describe("isChromeShortcutCommand", () => {
+  it("flags shortcuts for the terminal, right panel and project scripts", () => {
+    for (const command of [
+      "terminal.toggle",
+      "terminal.new",
+      "rightPanel.toggle",
+      "rightPanel.close",
+      "preview.refresh",
+      "diff.toggle",
+      "script.setup.run",
+    ]) {
+      expect(isChromeShortcutCommand(command)).toBe(true);
+    }
+  });
+
+  it("keeps thread and composer shortcuts", () => {
+    for (const command of ["thread.stop", "thread.settle", "modelPicker.toggle", "composer.mode"]) {
+      expect(isChromeShortcutCommand(command)).toBe(false);
+    }
+  });
+});
 
 describe("agent browser close confirmation", () => {
   const surfaces = [

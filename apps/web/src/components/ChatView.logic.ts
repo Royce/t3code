@@ -52,6 +52,7 @@ import type { TimelineEntry } from "../session-logic";
 import type { PreviewMiniPlayerSource } from "../previewMiniPlayerStore";
 import type { DesktopPreviewOverlay } from "../previewStateStore";
 import type { RightPanelSurface } from "../rightPanelStore";
+import { projectScriptIdFromCommand } from "../projectScripts";
 import {
   NO_PROVIDER_MODEL_SELECTION,
   resolveSelectableProviderInstanceEntry,
@@ -86,6 +87,21 @@ export function agentControlledBrowserCloseConfirmation(
     `Close ${activeBrowserCount} browsers while the agent is using them?`,
     "The agent is actively controlling these browsers. Closing them may interrupt the current browser actions.",
   ].join("\n");
+}
+
+/**
+ * Shortcuts that act on chrome the minimal (embed) ChatView does not mount:
+ * the terminal drawer, right panel surfaces, and project scripts, which run
+ * in a terminal.
+ */
+export function isChromeShortcutCommand(command: string): boolean {
+  return (
+    command.startsWith("terminal.") ||
+    command.startsWith("rightPanel.") ||
+    command.startsWith("preview.") ||
+    command === "diff.toggle" ||
+    projectScriptIdFromCommand(command) !== null
+  );
 }
 
 /** The floating player hides only while the same source is rendered in the panel. */

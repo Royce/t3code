@@ -61,6 +61,7 @@ import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
+import { isEmbedPathname } from "../embedRoute";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { shellEnvironment } from "../state/shell";
 import { useProject, useThreadShell } from "../state/entities";
@@ -197,6 +198,30 @@ function RootRouteView() {
         <DocumentTitleSync />
         <Outlet />
       </>
+    );
+  }
+
+  // Embedded threads keep live updates, theme and toasts but none of the app
+  // shell, and skip coordinators that could navigate the frame elsewhere
+  // (first-run wizard, snapshot setup) or act on other threads.
+  if (isEmbedPathname(pathname)) {
+    return (
+      <ToastProvider>
+        <AnchoredToastProvider>
+          <DocumentTitleSync />
+          <ContrastAppearanceSync />
+          <EnvironmentThemeSync />
+          <GlassAppearanceSync />
+          <FontAppearanceSync />
+          {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
+          <QueuedMessageSender />
+          <ConfirmDialogHost />
+          <SlowRpcRequestToastCoordinator />
+          <HostedStaticEnvironmentBootstrap />
+          {primaryEnvironmentAuthenticated ? <EventRouter skipInitialBootstrapNavigation /> : null}
+          <Outlet />
+        </AnchoredToastProvider>
+      </ToastProvider>
     );
   }
 
