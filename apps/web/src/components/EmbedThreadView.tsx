@@ -2,16 +2,10 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import ChatView from "./ChatView";
 import { resolveEmbedThreadViewState } from "../embedRoute";
-import {
-  resolveThreadDetailRef,
-  useThreadDetail,
-  useThreadShell,
-  useThreadStatus,
-} from "../state/entities";
+import { useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 import { resolveThreadRouteRenderState } from "../threadRoutes";
-import { resolveThreadSyncPhase } from "../threadSync";
 
 /**
  * The `/embed/$environmentId/$threadId` surface: one server thread's
@@ -22,20 +16,11 @@ export function EmbedThreadView({ threadRef }: { threadRef: ScopedThreadRef }) {
   const shell = useEnvironmentQuery(environmentShell.stateAtom(threadRef.environmentId));
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const threadShell = useThreadShell(threadRef);
-  // Once bootstrap shows no shell the thread is missing; dropping the detail
-  // subscription stops it retrying the 404. A shell arriving later resubscribes.
-  const detailRef = resolveThreadDetailRef(threadRef, {
-    shellExists: threadShell !== null,
-    waitForShell: bootstrapComplete,
-  });
-  const threadDetail = useThreadDetail(detailRef);
-  const threadStatus = useThreadStatus(detailRef);
   const viewState = resolveEmbedThreadViewState({
     renderState: resolveThreadRouteRenderState({
       bootstrapComplete,
-      serverThreadShellExists: threadShell !== null,
-      serverThreadDetailExists: threadDetail !== null,
-      serverThreadDetailDeleted: threadStatus === "deleted",
+      serverThreadExists: threadShell !== null,
+      serverThreadDeleted: threadShell?.deletedAt != null,
       draftThreadExists: false,
     }),
     threadShellExists: threadShell !== null,
@@ -48,11 +33,6 @@ export function EmbedThreadView({ threadRef }: { threadRef: ScopedThreadRef }) {
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}
           routeKind="server"
-          threadSyncPhase={resolveThreadSyncPhase({
-            detailExists: threadDetail !== null,
-            shellExists: threadShell !== null,
-            status: threadStatus,
-          })}
           chrome="minimal"
           reserveTitleBarControlInset={false}
         />
