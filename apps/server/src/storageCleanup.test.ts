@@ -555,6 +555,47 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
+  const withSubmodule = Effect.gen(function* () {
+    const fixture = yield* cleanupFixture;
+    const { fs, command, worktree } = fixture;
+    const identity = ["-c", "user.email=cleanup@example.test", "-c", "user.name=Cleanup test"];
+    const upstream = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-submodule-" });
+    yield* command(upstream, ["init", "-b", "main"]);
+    yield* command(upstream, [...identity, "commit", "--allow-empty", "-m", "initial"]);
+    yield* command(worktree, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      upstream,
+      "sub",
+    ]);
+    yield* command(worktree, [...identity, "commit", "-m", "add submodule"]);
+    return { ...fixture, identity };
+  });
+  it.live("removes a clean worktree with a populated submodule", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree } = yield* withSubmodule;
+        expect((yield* service.runNow).entries[0]).toMatchObject({ outcome: "removed" });
+        expect(yield* fs.exists(worktree)).toBe(false);
+      }),
+    ),
+  );
+  it.live("keeps a worktree whose submodule has unpushed commits", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree, command, identity } = yield* withSubmodule;
+        yield* command(`${worktree}/sub`, [...identity, "commit", "--allow-empty", "-m", "local"]);
+        yield* command(worktree, [...identity, "commit", "-am", "bump submodule"]);
+        expect((yield* service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Submodule has unpushed commits",
+        });
+        expect(yield* fs.exists(worktree)).toBe(true);
+      }),
+    ),
+  );
   it.live(
     "reports shared and running worktrees but omits disabled rules and missing directories",
     () =>

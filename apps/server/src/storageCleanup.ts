@@ -311,6 +311,25 @@ const make = Effect.gen(function* () {
     return file === undefined ? null : `has ignored files (${file})`;
   });
 
+  // True when any submodule has HEAD or local-branch commits no remote-tracking ref reaches.
+  const hasUnpushedSubmoduleCommits = Effect.fn("StorageCleanup.hasUnpushedSubmoduleCommits")(
+    function* (cwd: string) {
+      const result = yield* git.execute({
+        operation: "StorageCleanup.unpushedSubmoduleCommits",
+        cwd,
+        args: [
+          "submodule",
+          "--quiet",
+          "foreach",
+          "--recursive",
+          "git rev-list -n 1 HEAD --branches --not --remotes",
+        ],
+        maxOutputBytes: 1024,
+      });
+      return result.stdout.trim() !== "";
+    },
+  );
+
   const cleanupGit = Effect.fn("StorageCleanup.cleanupGit")(function* (
     cwd: string,
     args: string[],
@@ -320,6 +339,8 @@ const make = Effect.gen(function* () {
       operation: "StorageCleanup.cleanupGit",
       cwd,
       args,
+      // Callers match English stderr.
+      env: { LC_ALL: "C" },
       allowNonZeroExit: true,
       timeoutMs: 300_000,
     });
@@ -552,11 +573,36 @@ const make = Effect.gen(function* () {
         // edit arrives after our last status check.
         if (settings.worktreeKeepWhen === "tracked-changes")
           yield* cleanupGit(worktreePath, ["clean", "-ffdx"], "git clean");
-        yield* cleanupGit(
-          project.workspaceRoot,
-          ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", worktreePath],
-          "git worktree remove",
+        const removeWorktree = (force: boolean) =>
+          cleanupGit(
+            project.workspaceRoot,
+            [
+              "-c",
+              "status.showUntrackedFiles=normal",
+              "worktree",
+              "remove",
+              ...(force ? ["--force"] : []),
+              worktreePath,
+            ],
+            "git worktree remove",
+          );
+        const blockedBySubmodules = yield* removeWorktree(false).pipe(
+          Effect.as(false),
+          Effect.catchIf(
+            (error) => error.detail.includes("containing submodules"),
+            () => Effect.succeed(true),
+          ),
         );
+        // Git treats every populated submodule as dirty, so repeat its clean
+        // check before forcing. Removal also deletes this worktree's submodule
+        // clones, so keep commits that exist nowhere else.
+        if (blockedBySubmodules) {
+          const submoduleChanges = yield* localChangesReason(worktreePath, settings);
+          if (submoduleChanges !== null) return keep(submoduleChanges);
+          if (yield* hasUnpushedSubmoduleCommits(worktreePath))
+            return keep("submodule has unpushed commits");
+          yield* removeWorktree(true);
+        }
         entries.push({ ...entry, outcome: "removed", reason: sentence(removalReason), bytes });
         yield* gitManager.invalidateStatus(project.workspaceRoot);
         // Preserve branch and path: ProviderTurnStartService recreates the checkout
