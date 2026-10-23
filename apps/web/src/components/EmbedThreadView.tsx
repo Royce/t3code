@@ -3,9 +3,9 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import ChatView from "./ChatView";
 import { resolveEmbedThreadViewState } from "../embedRoute";
 import { useThreadShell } from "../state/entities";
-import { useEnvironmentQuery } from "../state/query";
-import { environmentShell } from "../state/shell";
-import { resolveThreadRouteRenderState } from "../threadRoutes";
+import { useEnvironmentShellStatus } from "../state/shell";
+import { useEnvironmentThread } from "../state/threads";
+import { isThreadRouteSnapshotAuthoritative, resolveThreadRouteRenderState } from "../threadRoutes";
 
 /**
  * The `/embed/$environmentId/$threadId` surface: one server thread's
@@ -13,14 +13,21 @@ import { resolveThreadRouteRenderState } from "../threadRoutes";
  * iframe embedding it stays on this thread.
  */
 export function EmbedThreadView({ threadRef }: { threadRef: ScopedThreadRef }) {
-  const shell = useEnvironmentQuery(environmentShell.stateAtom(threadRef.environmentId));
-  const bootstrapComplete = shell.data?.snapshot._tag === "Some";
+  const bootstrapComplete = isThreadRouteSnapshotAuthoritative(
+    useEnvironmentShellStatus(threadRef.environmentId),
+  );
   const threadShell = useThreadShell(threadRef);
+  // Until the shell lists the thread, its own load decides whether it exists.
+  const unlistedThreadDetail = useEnvironmentThread(
+    threadShell === null ? threadRef.environmentId : null,
+    threadShell === null ? threadRef.threadId : null,
+  );
   const viewState = resolveEmbedThreadViewState({
     renderState: resolveThreadRouteRenderState({
       bootstrapComplete,
       serverThreadExists: threadShell !== null,
       serverThreadDeleted: threadShell?.deletedAt != null,
+      unlistedThreadDetail,
       draftThreadExists: false,
     }),
     threadShellExists: threadShell !== null,
