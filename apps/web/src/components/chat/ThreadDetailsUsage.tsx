@@ -10,6 +10,7 @@ import {
   type LimitPace,
   limitsNotice,
   paceOf,
+  paceRemainingPercent,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
 import type { ReactNode } from "react";
@@ -21,6 +22,7 @@ import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { cn } from "../../lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { usePaceMark } from "../usage/UsageLimits";
 import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 
@@ -148,6 +150,7 @@ function LimitRow({
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const left = remainingPercent(window);
   const pace = paceOf(window, now);
+  const timeLeft = paceRemainingPercent(window, now);
   const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
   return (
     <UsageRow
@@ -156,11 +159,16 @@ function LimitRow({
       tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
       value={`${left}%`}
       ariaValue={`${left}% left`}
+      timeLeft={timeLeft}
       tooltip={
         <>
           <span className="text-foreground">
             {window.label}: {left}% left
+            {timeLeft !== null ? ` · ${timeLeft}% of the window left` : ""}
           </span>
+          {timeLeft !== null ? (
+            <span className="text-muted-foreground">The line is where even spending would be.</span>
+          ) : null}
           {window.resetsAt && resetsAt > now ? (
             <span className="text-muted-foreground">
               Resets in {formatDuration(resetsAt - now)} ·{" "}
@@ -180,6 +188,7 @@ function UsageRow({
   fill,
   tone,
   tick = null,
+  timeLeft = null,
   value,
   ariaValue = value,
   tooltip,
@@ -191,11 +200,14 @@ function UsageRow({
   readonly tone: UsageTone;
   /** A marker on the bar, from 0 to 100. */
   readonly tick?: number | null;
+  /** Window time left as a percentage; marks where even spending would be. */
+  readonly timeLeft?: number | null;
   readonly value: string;
   readonly ariaValue?: string;
   readonly tooltip: ReactNode;
   readonly muted?: boolean;
 }) {
+  const [barRef, paceMark] = usePaceMark(timeLeft);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -209,20 +221,32 @@ function UsageRow({
       >
         <span className="max-w-28 truncate text-muted-foreground">{label}</span>
         {fill !== null ? (
-          <span className="relative h-[3px] rounded-full bg-muted-foreground/30 dark:bg-muted-foreground/20">
-            {fill > 0 ? (
+          <span ref={barRef} className="relative h-[3px]">
+            <span
+              className="absolute inset-0 rounded-full bg-muted-foreground/30 dark:bg-muted-foreground/20"
+              style={paceMark?.gap}
+            >
+              {fill > 0 ? (
+                <span
+                  className={cn(
+                    "absolute inset-y-0 left-0 rounded-full",
+                    tone === "error"
+                      ? "bg-error"
+                      : tone === "warning"
+                        ? "bg-warning"
+                        : muted
+                          ? "bg-muted-foreground"
+                          : "bg-foreground/80",
+                  )}
+                  style={{ width: `max(${fill}%, 6px)` }}
+                />
+              ) : null}
+            </span>
+            {paceMark ? (
               <span
-                className={cn(
-                  "absolute inset-y-0 left-0 rounded-full",
-                  tone === "error"
-                    ? "bg-error"
-                    : tone === "warning"
-                      ? "bg-warning"
-                      : muted
-                        ? "bg-muted-foreground"
-                        : "bg-foreground/80",
-                )}
-                style={{ width: `max(${fill}%, 6px)` }}
+                aria-hidden
+                className="absolute -inset-y-[3px] w-0.5 -translate-x-1/2 rounded-full bg-foreground/80"
+                style={paceMark.tick}
               />
             ) : null}
             {tick !== null ? (
